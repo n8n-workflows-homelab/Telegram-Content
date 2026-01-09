@@ -15,7 +15,7 @@ const createDynamicConfig = (): AppConfig => {
       // If it's an object, return a Proxy for nested properties too
       if (value && typeof value === 'object' && !Array.isArray(value)) {
         return new Proxy(value, {
-          get(nestedTarget: any, nestedProp: string | symbol) {
+          get(_nestedTarget: any, nestedProp: string | symbol) {
             // Get fresh config again for nested access
             const freshConfig = configManager.getConfig();
             const nestedValue = (freshConfig[prop] as any)?.[nestedProp];
