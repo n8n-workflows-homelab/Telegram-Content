@@ -107,33 +107,35 @@ class ConfigManager {
    */
   private validateSecretToken(token: string | undefined): string | undefined {
     if (!token) return undefined;
-    
+
     // Trim whitespace
     const trimmed = token.trim();
-    
+
     // If empty after trimming, return undefined
     if (trimmed.length === 0) return undefined;
-    
+
     // Validate: only alphanumeric, hyphens, and underscores allowed
     // Length: 1-256 characters (Telegram requirement)
     if (trimmed.length > 256) {
       log.warn("Secret token exceeds 256 characters, truncating");
       return trimmed.substring(0, 256);
     }
-    
+
     // Check for invalid characters
     const validPattern = /^[a-zA-Z0-9_-]+$/;
     if (!validPattern.test(trimmed)) {
-      log.warn(`Secret token contains invalid characters. Only alphanumeric, hyphens, and underscores are allowed.`);
+      log.warn(
+        `Secret token contains invalid characters. Only alphanumeric, hyphens, and underscores are allowed.`
+      );
       // Remove invalid characters
-      const sanitized = trimmed.replace(/[^a-zA-Z0-9_-]/g, '');
+      const sanitized = trimmed.replace(/[^a-zA-Z0-9_-]/g, "");
       if (sanitized.length === 0) {
         log.warn("Secret token became empty after sanitization, ignoring");
         return undefined;
       }
       return sanitized;
     }
-    
+
     return trimmed;
   }
 
@@ -157,7 +159,9 @@ class ConfigManager {
 
     // Validate secret token after merge
     if (output.telegram?.secretToken !== undefined) {
-      output.telegram.secretToken = this.validateSecretToken(output.telegram.secretToken);
+      output.telegram.secretToken = this.validateSecretToken(
+        output.telegram.secretToken
+      );
     }
 
     return output;
@@ -265,39 +269,66 @@ class ConfigManager {
       getLogger().info("Updating configuration...");
 
       // Webhook URL
-      if (
-        updates.webhookUrl !== undefined &&
-        updates.webhookUrl !== this.currentConfig.webhookUrl
-      ) {
-        try {
-          new URL(updates.webhookUrl);
-          this.currentConfig.webhookUrl = updates.webhookUrl;
-          this.configuredKeys.add("webhookUrl");
-          getLogger().info("Webhook URL updated");
-        } catch (e) {
-          errors.push("Invalid webhook URL");
+      if (updates.webhookUrl !== undefined) {
+        const trimmedWebhookUrl =
+          typeof updates.webhookUrl === "string"
+            ? updates.webhookUrl.trim()
+            : updates.webhookUrl;
+
+        // Only update if value actually changed
+        if (trimmedWebhookUrl !== this.currentConfig.webhookUrl) {
+          if (trimmedWebhookUrl === "" || trimmedWebhookUrl === null) {
+            // Allow empty string to clear webhook URL
+            this.currentConfig.webhookUrl = "";
+            this.configuredKeys.delete("webhookUrl");
+            getLogger().info("Webhook URL cleared");
+          } else {
+            try {
+              // Validate URL format
+              new URL(trimmedWebhookUrl);
+              this.currentConfig.webhookUrl = trimmedWebhookUrl;
+              this.configuredKeys.add("webhookUrl");
+              getLogger().info(`Webhook URL updated: ${trimmedWebhookUrl}`);
+            } catch (e: any) {
+              const errorMsg = e instanceof Error ? e.message : String(e);
+              getLogger().error(`Invalid webhook URL: ${errorMsg}`);
+              errors.push(`Invalid webhook URL: ${errorMsg}`);
+            }
+          }
+        } else {
+          getLogger().debug("Webhook URL unchanged, skipping update");
         }
       }
 
       // N8N Tracking URL
-      if (
-        updates.n8nTrackingUrl !== undefined &&
-        updates.n8nTrackingUrl !== this.currentConfig.n8nTrackingUrl
-      ) {
-        if (updates.n8nTrackingUrl === "" || updates.n8nTrackingUrl === null) {
-          // Allow empty string to disable tracking
-          this.currentConfig.n8nTrackingUrl = "";
-          this.configuredKeys.delete("n8nTrackingUrl");
-          getLogger().info("N8N Tracking URL cleared");
-        } else {
-          try {
-            new URL(updates.n8nTrackingUrl);
-            this.currentConfig.n8nTrackingUrl = updates.n8nTrackingUrl;
-            this.configuredKeys.add("n8nTrackingUrl");
-            getLogger().info("N8N Tracking URL updated");
-          } catch (e) {
-            errors.push("Invalid N8N Tracking URL");
+      if (updates.n8nTrackingUrl !== undefined) {
+        const trimmedN8nUrl =
+          typeof updates.n8nTrackingUrl === "string"
+            ? updates.n8nTrackingUrl.trim()
+            : updates.n8nTrackingUrl;
+
+        // Only update if value actually changed
+        if (trimmedN8nUrl !== this.currentConfig.n8nTrackingUrl) {
+          if (trimmedN8nUrl === "" || trimmedN8nUrl === null) {
+            // Allow empty string to disable tracking
+            this.currentConfig.n8nTrackingUrl = "";
+            this.configuredKeys.delete("n8nTrackingUrl");
+            getLogger().info("N8N Tracking URL cleared");
+          } else {
+            try {
+              // Validate URL format
+              new URL(trimmedN8nUrl);
+              this.currentConfig.n8nTrackingUrl = trimmedN8nUrl;
+              this.configuredKeys.add("n8nTrackingUrl");
+              getLogger().info(`N8N Tracking URL updated: ${trimmedN8nUrl}`);
+            } catch (e: any) {
+              const errorMsg = e instanceof Error ? e.message : String(e);
+              getLogger().error(`Invalid N8N Tracking URL: ${errorMsg}`);
+              errors.push(`Invalid N8N Tracking URL: ${errorMsg}`);
+            }
           }
+        } else {
+          getLogger().debug("N8N Tracking URL unchanged, skipping update");
         }
       }
 
@@ -314,9 +345,13 @@ class ConfigManager {
         }
 
         if (updates.telegram.secretToken !== undefined) {
-          const validatedToken = this.validateSecretToken(updates.telegram.secretToken);
+          const validatedToken = this.validateSecretToken(
+            updates.telegram.secretToken
+          );
           if (validatedToken !== updates.telegram.secretToken) {
-            getLogger().warn("Secret token was sanitized/validated during update");
+            getLogger().warn(
+              "Secret token was sanitized/validated during update"
+            );
           }
           this.currentConfig.telegram.secretToken = validatedToken;
           getLogger().info("Telegram secret token updated");
@@ -497,14 +532,28 @@ class ConfigManager {
 
       // Save to file
       if (errors.length === 0) {
-        this.saveConfigToFile(this.currentConfig);
-        getLogger().info(
-          "Configuration updated successfully and saved to file"
-        );
-        return { success: true, errors: [] };
+        try {
+          this.saveConfigToFile(this.currentConfig);
+          getLogger().info(
+            "Configuration updated successfully and saved to file"
+          );
+          getLogger().debug(
+            `Updated config: webhookUrl=${this.currentConfig.webhookUrl}, n8nTrackingUrl=${this.currentConfig.n8nTrackingUrl}`
+          );
+          return { success: true, errors: [] };
+        } catch (saveError: any) {
+          getLogger().error(
+            `Failed to save config to file: ${saveError.message}`
+          );
+          errors.push(`Failed to save configuration: ${saveError.message}`);
+          return { success: false, errors };
+        }
       } else {
         getLogger().warn(
-          `Configuration updated with errors: ${errors.join(", ")}`
+          `Configuration update failed with ${errors.length} error(s): ${errors.join(", ")}`
+        );
+        getLogger().warn(
+          "Config was NOT saved to file due to validation errors"
         );
         return { success: false, errors };
       }
