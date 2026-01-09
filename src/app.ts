@@ -302,7 +302,27 @@ async function start() {
       const webhookOptions: any = { url: webhookUrl };
 
       if (config.telegram.secretToken) {
-        webhookOptions.secret_token = config.telegram.secretToken;
+        // Validate and trim secret token before setting webhook
+        // Telegram only allows: alphanumeric, hyphens, and underscores
+        const token = config.telegram.secretToken.trim();
+        const validPattern = /^[a-zA-Z0-9_-]+$/;
+        
+        if (!validPattern.test(token)) {
+          logger.error(
+            `Invalid secret token format. Only alphanumeric characters, hyphens, and underscores are allowed.`
+          );
+          throw new Error(
+            "Invalid secret token format. Only alphanumeric characters, hyphens, and underscores are allowed."
+          );
+        }
+        
+        if (token.length > 256) {
+          logger.error(`Secret token exceeds 256 characters (Telegram limit)`);
+          throw new Error("Secret token exceeds 256 characters (Telegram limit)");
+        }
+        
+        webhookOptions.secret_token = token;
+        logger.info(`Using secret token (length: ${token.length})`);
       }
 
       logger.info(`Setting webhook to: ${webhookUrl}`);

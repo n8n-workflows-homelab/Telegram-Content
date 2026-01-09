@@ -102,6 +102,42 @@ class ConfigManager {
   }
 
   /**
+   * Validate and sanitize secret token for Telegram webhook
+   * Telegram only allows: alphanumeric characters, hyphens, and underscores
+   */
+  private validateSecretToken(token: string | undefined): string | undefined {
+    if (!token) return undefined;
+    
+    // Trim whitespace
+    const trimmed = token.trim();
+    
+    // If empty after trimming, return undefined
+    if (trimmed.length === 0) return undefined;
+    
+    // Validate: only alphanumeric, hyphens, and underscores allowed
+    // Length: 1-256 characters (Telegram requirement)
+    if (trimmed.length > 256) {
+      log.warn("Secret token exceeds 256 characters, truncating");
+      return trimmed.substring(0, 256);
+    }
+    
+    // Check for invalid characters
+    const validPattern = /^[a-zA-Z0-9_-]+$/;
+    if (!validPattern.test(trimmed)) {
+      log.warn(`Secret token contains invalid characters. Only alphanumeric, hyphens, and underscores are allowed.`);
+      // Remove invalid characters
+      const sanitized = trimmed.replace(/[^a-zA-Z0-9_-]/g, '');
+      if (sanitized.length === 0) {
+        log.warn("Secret token became empty after sanitization, ignoring");
+        return undefined;
+      }
+      return sanitized;
+    }
+    
+    return trimmed;
+  }
+
+  /**
    * Deep merge two objects
    */
   private deepMerge(target: any, source: any): any {
@@ -117,6 +153,11 @@ class ConfigManager {
       } else {
         output[key] = source[key];
       }
+    }
+
+    // Validate secret token after merge
+    if (output.telegram?.secretToken !== undefined) {
+      output.telegram.secretToken = this.validateSecretToken(output.telegram.secretToken);
     }
 
     return output;
@@ -273,8 +314,11 @@ class ConfigManager {
         }
 
         if (updates.telegram.secretToken !== undefined) {
-          this.currentConfig.telegram.secretToken =
-            updates.telegram.secretToken || undefined;
+          const validatedToken = this.validateSecretToken(updates.telegram.secretToken);
+          if (validatedToken !== updates.telegram.secretToken) {
+            getLogger().warn("Secret token was sanitized/validated during update");
+          }
+          this.currentConfig.telegram.secretToken = validatedToken;
           getLogger().info("Telegram secret token updated");
         }
       }
