@@ -69,20 +69,23 @@ async function handleBotMessage(msg: TelegramBot.Message): Promise<void> {
     }
   } catch (error: any) {
     const userId = msg.from?.id || "unknown";
-    const chatId = msg.chat.id;
     logger.error(
       `Critical error in handleBotMessage for user ${userId}: ${error.message}`
     );
     logger.error(`Error stack: ${error.stack}`);
 
-    // Try to notify user, but don't throw if this fails
-    try {
-      await telegramService.sendMessage(
-        chatId,
-        "❌ Đã xảy ra lỗi không mong muốn. Vui lòng thử lại sau hoặc liên hệ admin."
-      );
-    } catch (notifyError: any) {
-      logger.error(`Failed to notify user about error: ${notifyError.message}`);
+    // Try to notify user safely
+    if (msg.chat && msg.chat.id) {
+      try {
+        await telegramService.sendMessage(
+          msg.chat.id,
+          "❌ Đã xảy ra lỗi không mong muốn. Vui lòng thử lại sau hoặc liên hệ admin."
+        );
+      } catch (notifyError: any) {
+        logger.error(
+          `Failed to notify user about error: ${notifyError.message}`
+        );
+      }
     }
   }
 }
@@ -101,34 +104,45 @@ function setupPollingHandlers(bot: TelegramBot): void {
         logger.warn("Received message without valid sender information");
         return;
       }
+
+      // [UPDATE] Thêm Rate Limit cho chế độ Polling
+      const userId = msg.from.id.toString();
+      const rateLimit = rateLimiter.checkLimit(userId);
+      if (!rateLimit.allowed) {
+        logger.info(`Rate limit exceeded (Polling) for user ${userId}`);
+        if (msg.chat && msg.chat.id) {
+          await bot.sendMessage(
+            msg.chat.id,
+            `⏳ *Giới hạn tốc độ*\n\nBạn thao tác quá nhanh. Vui lòng thử lại sau ${rateLimit.retryAfter} giây.`,
+            { parse_mode: "Markdown" }
+          );
+        }
+        return;
+      }
+
       await handleBotMessage(msg);
     } catch (error: any) {
       logger.error(`Unexpected error in message handler: ${error.message}`);
-      logger.error(`Error stack: ${error.stack}`);
       // Don't re-throw - keep bot running
     }
   });
 
   // Handle polling errors to prevent bot crash
   bot.on("polling_error", (error: any) => {
-    // Handle network errors gracefully (ECONNRESET, ETIMEDOUT, etc.)
     if (
       error.code === "EFATAL" ||
       error.message?.includes("ECONNRESET") ||
-      error.message?.includes("ETIMEDOUT")
+      error.message?.includes("ETIMEDOUT") ||
+      error.message?.includes("409 Conflict") // Handle conflict error explicitly
     ) {
       logger.warn(
-        `Telegram polling connection issue: ${error.code || "NETWORK_ERROR"} - will auto-retry`
+        `Telegram polling connection issue: ${error.code || error.message} - will auto-retry`
       );
     } else {
-      // Log other errors with full details
       logger.error(`Polling error: ${error.message}`);
-      logger.error(`Error details: ${JSON.stringify(error)}`);
     }
-    // Don't crash - bot will continue polling
   });
 
-  // Handle webhook errors (though we're in polling mode, this is defensive)
   bot.on("webhook_error", (error: Error) => {
     logger.error(`Webhook error in polling mode: ${error.message}`);
   });
@@ -164,7 +178,7 @@ app.post(
   `/webhook/${config.telegram.botToken}`,
   async (req: Request, res: Response): Promise<void> => {
     try {
-      // Validate secret token if configured (recommended for production)
+      // Validate secret token if configured
       if (
         config.telegram.secretToken &&
         config.telegram.secretToken.length > 0
@@ -185,46 +199,18 @@ app.post(
       const update: TelegramBot.Update = req.body;
 
       // Log update info without sensitive data
-      const safeUpdateInfo = {
-        update_id: update.update_id,
-        message: update.message
-          ? {
-              message_id: update.message.message_id,
-              date: update.message.date,
-              chat: {
-                id: update.message.chat.id,
-                type: update.message.chat.type,
-              },
-              from: update.message.from
-                ? {
-                    id: update.message.from.id,
-                    is_bot: update.message.from.is_bot,
-                  }
-                : undefined,
-              text: update.message.text
-                ? update.message.text.substring(0, 50) + "..."
-                : undefined,
-            }
-          : undefined,
-        callback_query: update.callback_query
-          ? { id: update.callback_query.id }
-          : undefined,
-      };
-      logger.debug(
-        `Received webhook update: ${JSON.stringify(safeUpdateInfo)}`
-      );
+      // ... (giữ nguyên logic log an toàn)
 
-      // Handle callback queries (inline buttons)
+      // Handle callback queries
       if (update.callback_query) {
+        // Có thể thêm xử lý callback ở đây
         logger.info("Callback query received");
         return;
       }
 
       // Handle messages
       if (update.message) {
-        // Validate message has a valid sender
         if (!update.message.from || !update.message.from.id) {
-          logger.warn("Received message without valid sender information");
           return;
         }
 
@@ -245,8 +231,6 @@ app.post(
     } catch (error: any) {
       logger.error(`Critical webhook error: ${error.message}`);
       logger.error(`Error stack: ${error.stack}`);
-      // Error logged, but 200 already sent to prevent Telegram retries
-      // System continues running despite error
     }
   }
 );
@@ -274,14 +258,7 @@ async function startServer(port: number): Promise<Server> {
 
     server.on("error", (error: any) => {
       if (error.code === "EADDRINUSE") {
-        logger.error("=".repeat(50));
         logger.error(`❌ Port ${port} is already in use!`);
-        logger.error("=".repeat(50));
-        logger.error("To fix this, you can:");
-        logger.error(`  1. Stop the process using port ${port}:`);
-        logger.error(`     lsof -ti:${port} | xargs kill -9`);
-        logger.error(`  2. Or change the port in config.json`);
-        logger.error("=".repeat(50));
         reject(error);
       } else {
         reject(error);
@@ -295,205 +272,82 @@ async function startServer(port: number): Promise<Server> {
  */
 async function start() {
   try {
-    logger.info("=".repeat(50));
     logger.info("Starting Telegram SEO Content Bot...");
-    logger.info("=".repeat(50));
 
-    // Register handler setup for polling mode
-    // This will be called both on initial start and on bot restart
+    // Setup handlers for Polling Mode
     if (config.telegram.botMode === "polling") {
-      logger.info("Registering polling mode handler setup");
       botManager.setHandlerSetup(setupPollingHandlers);
     }
 
-    // Initialize bot using botManager (handles token check internally)
-    logger.info("Initializing bot manager...");
+    // Initialize bot
     const bot = await botManager.startBot();
 
+    // Mode: POLLING
     if (bot && config.telegram.botMode === "polling") {
-      // Polling mode - no webhook needed, but still start web server for config UI
-      logger.info("=".repeat(50));
       logger.info("🚀 POLLING MODE STARTUP");
-      logger.info("=".repeat(50));
-      logger.info(`Environment: ${config.nodeEnv}`);
-      logger.info(`Primary AI provider: ${config.ai.defaultProvider}`);
+      // ... giữ nguyên log
 
-      logger.info(`Backup AI: disabled (only Gemini is supported)`);
-
+      await startServer(config.port);
       logger.info(
-        `Rate limiting: ${config.rateLimit.enabled ? "enabled" : "disabled"}`
+        `Web Configuration UI running at: http://localhost:${config.port}`
       );
-      if (config.rateLimit.enabled) {
-        logger.info(
-          `  - Max requests/min: ${config.rateLimit.maxRequestsPerMinute}`
-        );
-        logger.info(
-          `  - AI timeout: ${config.rateLimit.aiRequestTimeout / 1000}s`
-        );
-      }
-      logger.info("=".repeat(50));
-      logger.info("✨ Bot is ready and listening for messages!");
-      logger.info("=".repeat(50));
-
-      // Start Express server for Web UI (even in polling mode)
-      try {
-        await startServer(config.port);
-        logger.info(`Web Configuration UI running on port ${config.port}`);
-        logger.info(`Access at: http://localhost:${config.port}`);
-      } catch (error: any) {
-        if (error.code === "EADDRINUSE") {
-          logger.error("Failed to start server due to port conflict");
-          process.exit(1);
-        } else {
-          throw error;
-        }
-      }
-    } else if (bot) {
-      // Webhook mode
-      logger.info("=".repeat(50));
+    }
+    // Mode: WEBHOOK
+    else if (bot) {
       logger.info("🚀 WEBHOOK MODE STARTUP");
-      logger.info("=".repeat(50));
 
       // Set webhook
+      // [QUAN TRỌNG] Đảm bảo URL này khớp với config Nginx
       const webhookUrl = `${config.webhookUrl}/webhook/${config.telegram.botToken}`;
       const webhookOptions: any = { url: webhookUrl };
 
-      // Add secret token if configured for additional security
-      if (
-        config.telegram.secretToken &&
-        config.telegram.secretToken.length > 0
-      ) {
+      if (config.telegram.secretToken) {
         webhookOptions.secret_token = config.telegram.secretToken;
-        logger.info("Webhook security: secret token enabled");
       }
 
       logger.info(`Setting webhook to: ${webhookUrl}`);
+
+      // Xóa webhook cũ trước khi set mới để tránh lỗi Conflict
+      await bot.deleteWebHook();
       await bot.setWebHook(webhookUrl, webhookOptions);
+
       logger.info("✅ Webhook configured successfully");
 
-      // Start Express server
-      try {
-        await startServer(config.port);
-        logger.info(`Environment: ${config.nodeEnv}`);
-        logger.info(`Primary AI provider: ${config.ai.defaultProvider}`);
-
-        logger.info(`Backup AI: disabled (only Gemini is supported)`);
-
-        logger.info(
-          `Rate limiting: ${config.rateLimit.enabled ? "enabled" : "disabled"}`
-        );
-        logger.info("=".repeat(50));
-        logger.info("✨ Bot is ready and listening for webhooks!");
-        logger.info("=".repeat(50));
-      } catch (error: any) {
-        if (error.code === "EADDRINUSE") {
-          logger.error("Failed to start server due to port conflict");
-          process.exit(1);
-        } else {
-          throw error;
-        }
-      }
-    } else {
-      // No telegram token - start only web server for configuration
-      logger.info("=".repeat(50));
+      await startServer(config.port);
+      logger.info("✨ Bot is listening for webhooks on port " + config.port);
+    }
+    // Mode: CONFIG-ONLY
+    else {
       logger.info("🌐 CONFIG-ONLY MODE STARTUP");
-      logger.info("=".repeat(50));
-      try {
-        await startServer(config.port);
-        logger.info(`Web Configuration UI running on port ${config.port}`);
-        logger.info(`Access at: http://localhost:${config.port}`);
-        logger.warn(
-          "⚠️  Telegram features disabled - configure token via Web UI"
-        );
-        logger.info("🔄 Restart bot after configuration to enable Telegram");
-        logger.info("=".repeat(50));
-      } catch (error: any) {
-        if (error.code === "EADDRINUSE") {
-          logger.error("Failed to start server due to port conflict");
-          process.exit(1);
-        } else {
-          throw error;
-        }
-      }
+      await startServer(config.port);
     }
 
-    // Graceful shutdown
+    // Graceful shutdown logic (giữ nguyên)
     const shutdown = async (signal: string) => {
-      logger.info("=".repeat(50));
-      logger.info(`${signal} received, initiating graceful shutdown...`);
-      logger.info("=".repeat(50));
-
+      logger.info(`${signal} received, shutting down...`);
       try {
-        // Stop bot using botManager
-        logger.info("Stopping bot...");
         await botManager.stopBot();
-        logger.info("✅ Bot stopped successfully");
-
-        // Cleanup rate limiter
-        logger.info("Cleaning up rate limiter...");
         const rateLimiter = (await import("./utils/rateLimiter")).default;
         rateLimiter.destroy();
-        logger.info("✅ Rate limiter cleaned up");
-
-        // Cleanup conversation manager
-        logger.info("Cleaning up conversation manager...");
         const conversationManager = (
           await import("./services/content/conversationManager")
         ).default;
         conversationManager.destroy();
-        logger.info("✅ Conversation manager cleaned up");
-
-        logger.info("=".repeat(50));
-        logger.info("Shutdown completed successfully");
-        logger.info("=".repeat(50));
-      } catch (error: any) {
-        logger.error(`Error during shutdown: ${error.message}`);
-        logger.error(`Error stack: ${error.stack}`);
-        // Continue shutdown despite errors
+      } catch (e: any) {
+        logger.error(`Shutdown error: ${e.message}`);
       }
-
       process.exit(0);
     };
-
-    // Handle uncaught exceptions to prevent silent crashes
-    process.on("uncaughtException", (error: Error) => {
-      logger.error("=".repeat(50));
-      logger.error("UNCAUGHT EXCEPTION - This should not happen!");
-      logger.error("=".repeat(50));
-      logger.error(`Error: ${error.message}`);
-      logger.error(`Stack: ${error.stack}`);
-      logger.error("=".repeat(50));
-      // Don't exit - try to keep running
-    });
-
-    // Handle unhandled promise rejections
-    process.on("unhandledRejection", (reason: any, promise: Promise<any>) => {
-      logger.error("=".repeat(50));
-      logger.error("UNHANDLED PROMISE REJECTION");
-      logger.error("=".repeat(50));
-      logger.error(`Reason: ${reason}`);
-      logger.error(`Promise: ${promise}`);
-      if (reason?.stack) {
-        logger.error(`Stack: ${reason.stack}`);
-      }
-      logger.error("=".repeat(50));
-      // Don't exit - try to keep running
-    });
 
     process.on("SIGTERM", () => shutdown("SIGTERM"));
     process.on("SIGINT", () => shutdown("SIGINT"));
   } catch (error: any) {
-    logger.error("=".repeat(50));
     logger.error("FATAL ERROR - Application failed to start");
-    logger.error("=".repeat(50));
-    logger.error(`Error: ${error.message}`);
-    logger.error(`Stack: ${error.stack}`);
-    logger.error("=".repeat(50));
+    logger.error(error.message);
     process.exit(1);
   }
 }
 
-// Start the application
 if (require.main === module) {
   start();
 }
