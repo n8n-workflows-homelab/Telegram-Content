@@ -8,8 +8,23 @@ import configManager from './configManager';
 const createDynamicConfig = (): AppConfig => {
   return new Proxy({} as AppConfig, {
     get(_target, prop: keyof AppConfig) {
+      // Always get fresh config from configManager
       const currentConfig = configManager.getConfig();
-      return currentConfig[prop];
+      const value = currentConfig[prop];
+      
+      // If it's an object, return a Proxy for nested properties too
+      if (value && typeof value === 'object' && !Array.isArray(value)) {
+        return new Proxy(value, {
+          get(nestedTarget: any, nestedProp: string | symbol) {
+            // Get fresh config again for nested access
+            const freshConfig = configManager.getConfig();
+            const nestedValue = (freshConfig[prop] as any)?.[nestedProp];
+            return nestedValue;
+          },
+        });
+      }
+      
+      return value;
     },
     // Make it look like a regular object for JSON.stringify, console.log, etc.
     ownKeys() {

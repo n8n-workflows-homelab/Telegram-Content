@@ -154,26 +154,46 @@ export async function sendWebhookWithRetry(
           );
           return response;
         } catch (axiosError: any) {
+          // Log detailed request information
+          const requestDetails = {
+            method: "POST",
+            url: url,
+            payload: payload.data,
+            payloadType: payload.type,
+            headers: {
+              "Content-Type": "application/json",
+              "User-Agent": "Telegram-SEO-Bot/1.0",
+            },
+          };
+
           // Enhanced error logging for different error types
           if (axiosError.code === "ECONNREFUSED") {
             logger.error(`Connection refused to webhook URL: ${url}`);
+            logger.error(`Request details: ${JSON.stringify(requestDetails, null, 2)}`);
             throw new Error("Webhook server connection refused");
           } else if (
             axiosError.code === "ETIMEDOUT" ||
             axiosError.code === "ECONNABORTED"
           ) {
             logger.error(`Webhook request timeout for ${taskName}`);
+            logger.error(`Request details: ${JSON.stringify(requestDetails, null, 2)}`);
             throw new Error("Webhook request timeout");
           } else if (axiosError.response) {
             logger.error(
               `Webhook server returned error: ${axiosError.response.status}`
             );
+            logger.error(`Request details: ${JSON.stringify(requestDetails, null, 2)}`);
             logger.error(
               `Error response: ${JSON.stringify(axiosError.response.data).substring(0, 200)}`
             );
+            // Store request details in error for later use
+            (axiosError as any).requestDetails = requestDetails;
             throw axiosError;
           } else {
             logger.error(`Webhook request error: ${axiosError.message}`);
+            logger.error(`Request details: ${JSON.stringify(requestDetails, null, 2)}`);
+            // Store request details in error for later use
+            (axiosError as any).requestDetails = requestDetails;
             throw axiosError;
           }
         }
@@ -188,23 +208,74 @@ export async function sendWebhookWithRetry(
 
     logger.info(`✅ Webhook send completed successfully for ${taskName}`);
   } catch (error: any) {
+    // Prepare detailed request information
+    const requestDetails = (error.requestDetails || {
+      method: "POST",
+      url: url,
+      payload: payload.data,
+      payloadType: payload.type,
+    }) as {
+      method: string;
+      url: string;
+      payload: any;
+      payloadType: string;
+    };
+
+    // Sanitize payload for logging (limit size)
+    const sanitizedPayload = JSON.stringify(requestDetails.payload);
+    const payloadPreview = sanitizedPayload.length > 500 
+      ? sanitizedPayload.substring(0, 500) + "... (truncated)" 
+      : sanitizedPayload;
+
+    // Log detailed error information
     logger.error(`=`.repeat(50));
     logger.error(
       `WEBHOOK SEND FAILED for ${taskName} after ${maxRetries} retries`
     );
-    logger.error(`URL: ${url}`);
+    logger.error(`Request Method: ${requestDetails.method}`);
+    logger.error(`Request URL: ${requestDetails.url}`);
+    logger.error(`Payload Type: ${requestDetails.payloadType}`);
+    logger.error(`Payload (preview): ${payloadPreview}`);
     logger.error(`Error: ${error.message}`);
+    if (error.response) {
+      logger.error(`Response Status: ${error.response.status}`);
+      logger.error(`Response Data: ${JSON.stringify(error.response.data).substring(0, 300)}`);
+    }
+    if (error.code) {
+      logger.error(`Error Code: ${error.code}`);
+    }
     logger.error(`Error stack: ${error.stack}`);
     logger.error(`=`.repeat(50));
+
+    // Prepare detailed error message for user
+    let errorDetails = `❌ *Lỗi gửi kết quả*\n\n`;
+    errorDetails += `Hệ thống đã tạo xong ${taskName} nhưng không thể gửi kết quả đến máy chủ của bạn sau ${maxRetries} lần thử.\n\n`;
+    errorDetails += `*Chi tiết request:*\n`;
+    errorDetails += `• Method: \`${requestDetails.method}\`\n`;
+    errorDetails += `• URL: \`${requestDetails.url}\`\n`;
+    errorDetails += `• Payload Type: \`${requestDetails.payloadType}\`\n\n`;
+    errorDetails += `*Lỗi:*\n`;
+    errorDetails += `\`${error.message}\`\n\n`;
+    
+    if (error.response) {
+      errorDetails += `*Response từ server:*\n`;
+      errorDetails += `• Status: \`${error.response.status}\`\n`;
+      if (error.response.data) {
+        const responsePreview = JSON.stringify(error.response.data).substring(0, 200);
+        errorDetails += `• Data: \`${responsePreview}${responsePreview.length >= 200 ? '...' : ''}\`\n`;
+      }
+      errorDetails += `\n`;
+    }
+    
+    errorDetails += `*Payload (preview):*\n`;
+    errorDetails += `\`\`\`json\n${payloadPreview.substring(0, 300)}${payloadPreview.length >= 300 ? '...' : ''}\n\`\`\`\n\n`;
+    errorDetails += `Vui lòng kiểm tra lại URL webhook và đảm bảo máy chủ của bạn trả về HTTP 200 OK.`;
 
     // Gửi thông báo thất bại về Telegram cho người dùng đang tương tác
     try {
       await telegramService.sendMessage(
         chatId,
-        `❌ *Lỗi gửi kết quả*\n\n` +
-          `Hệ thống đã tạo xong ${taskName} nhưng không thể gửi kết quả đến máy chủ của bạn tại \`${url}\` sau ${maxRetries} lần thử.\n\n` +
-          `Lỗi: ${error.message}\n\n` +
-          `Vui lòng kiểm tra lại URL webhook và đảm bảo máy chủ của bạn trả về HTTP 200 OK.`,
+        errorDetails,
         { parse_mode: "Markdown" }
       );
     } catch (notifyError: any) {

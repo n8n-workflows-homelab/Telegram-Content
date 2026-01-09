@@ -79,11 +79,13 @@ class TelegramController {
           : taskType === "outline"
             ? "outline_error"
             : "article_error";
+      // Get fresh config to ensure we use latest URL
+      const currentTrackingUrl = config.n8nTrackingUrl;
       logger.info(
-        `[User ${userId}] Forwarding ${taskType} error to N8N tracking URL`
+        `[User ${userId}] Forwarding ${taskType} error to N8N tracking URL: ${currentTrackingUrl}`
       );
       await sendWebhookWithRetry(
-        config.n8nTrackingUrl,
+        currentTrackingUrl,
         {
           type: errorType,
           data: errorPayload,
@@ -651,9 +653,11 @@ _Dàn ý chi tiết đã được gửi đến webhook để tiếp tục xử l
           },
         };
 
-        logger.info(`[User ${userId}] Forwarding outline to N8N for tracking`);
+        // Get fresh config to ensure we use latest URL
+        const currentTrackingUrl = config.n8nTrackingUrl;
+        logger.info(`[User ${userId}] Forwarding outline to N8N for tracking: ${currentTrackingUrl}`);
         await sendWebhookWithRetry(
-          config.n8nTrackingUrl,
+          currentTrackingUrl,
           {
             type: "outline",
             data: outlinePayload,
@@ -850,9 +854,11 @@ _Bài viết đầy đủ đã được gửi đến webhook._
           },
         };
 
-        logger.info(`[User ${userId}] Forwarding article to N8N for tracking`);
+        // Get fresh config to ensure we use latest URL
+        const currentTrackingUrl = config.n8nTrackingUrl;
+        logger.info(`[User ${userId}] Forwarding article to N8N for tracking: ${currentTrackingUrl}`);
         await sendWebhookWithRetry(
-          config.n8nTrackingUrl,
+          currentTrackingUrl,
           {
             type: "article",
             data: articlePayload,

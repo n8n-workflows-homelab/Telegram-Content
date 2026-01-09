@@ -196,9 +196,25 @@ class ConfigManager {
 
   /**
    * Get current config
+   * Returns a copy to prevent external mutations
    */
   getConfig(): AppConfig {
     return { ...this.currentConfig };
+  }
+
+  /**
+   * Reload config from file
+   * Useful when config file is modified externally
+   */
+  reloadConfig(): void {
+    try {
+      const reloadedConfig = this.loadConfig();
+      this.currentConfig = reloadedConfig;
+      this.markConfiguredKeys();
+      getLogger().info("Configuration reloaded from file");
+    } catch (error: any) {
+      getLogger().error(`Failed to reload config: ${error.message}`);
+    }
   }
 
   /**
@@ -537,9 +553,19 @@ class ConfigManager {
           getLogger().info(
             "Configuration updated successfully and saved to file"
           );
-          getLogger().debug(
-            `Updated config: webhookUrl=${this.currentConfig.webhookUrl}, n8nTrackingUrl=${this.currentConfig.n8nTrackingUrl}`
+          getLogger().info(
+            `Config values - webhookUrl: ${this.currentConfig.webhookUrl || '(empty)'}, n8nTrackingUrl: ${this.currentConfig.n8nTrackingUrl || '(empty)'}`
           );
+          
+          // Verify the saved config by reading it back (optional, for debugging)
+          if (fs.existsSync(CONFIG_FILE_PATH)) {
+            const savedContent = fs.readFileSync(CONFIG_FILE_PATH, "utf-8");
+            const savedConfig = JSON.parse(savedContent);
+            getLogger().debug(
+              `Verified saved config - webhookUrl: ${savedConfig.webhookUrl || '(empty)'}, n8nTrackingUrl: ${savedConfig.n8nTrackingUrl || '(empty)'}`
+            );
+          }
+          
           return { success: true, errors: [] };
         } catch (saveError: any) {
           getLogger().error(
